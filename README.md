@@ -5,7 +5,7 @@ A Manifest V3 Chrome Extension designed for language learners. It seamlessly inj
 ## Features
 
 - **Immersive Learn Mode**: Clicking the extension icon instantly toggles a dedicated learning view. It aggressively hides YouTube distractions (comments, recommendations) and expands the video player, overlaying large, highly-visible bilingual subtitles directly inside the video area.
-- **Bilingual Subtitles**: Automatically intercepts YouTube's closed captions (CC) and fetches the Chinese translation to display side-by-side in a scrollable sidebar.
+- **Bilingual Subtitles with Smart Fallback**: Automatically intercepts YouTube's closed captions (CC). It checks for high-quality native Chinese tracks to perfectly synchronize with the English audio. If a native track is missing, it falls back to a batched, free Google Translate API method that perfectly maps translated sentences 1:1 with English timestamps to fix YouTube's auto-translate chunking bugs.
 - **Auto-Sync & Click-to-Jump**: The subtitle sidebar auto-scrolls to keep the currently spoken sentence in view. Clicking any subtitle instantly jumps the video playback to that exact timestamp.
 - **A-B Sentence Looping**: Toggle the loop feature to continuously repeat the currently spoken sentence—perfect for listening comprehension and shadowing.
 - **Interactive Dictionary Lookup**: English subtitles are tokenized into clickable words. Clicking a word pauses the video and opens a floating tooltip with its definition fetched from a free dictionary API (`dictionaryapi.dev`).
@@ -15,7 +15,7 @@ A Manifest V3 Chrome Extension designed for language learners. It seamlessly inj
 
 - **Vite + React + TypeScript**: Built with modern web tooling for blazing fast HMR and optimized builds.
 - **Tailwind v4 in Shadow DOM**: The React UI is injected into YouTube using a Shadow DOM to strictly isolate Tailwind CSS classes, ensuring YouTube's complex global CSS does not interfere with the extension's styling.
-- **XHR & Fetch Interception**: To bypass YouTube's strict anti-bot protections and signature checks on subtitle URLs, the extension uses a main-world injection script (`src/inject.js`). It hooks into `XMLHttpRequest` and `fetch` to intercept the valid, fully-authenticated `json3` subtitle payloads the moment YouTube downloads them.
+- **XHR & Fetch Interception**: To bypass YouTube's strict anti-bot protections and signature checks on subtitle URLs, the extension uses a main-world injection script (`src/inject.js`). It hooks into `XMLHttpRequest` and `fetch` to intercept the valid, fully-authenticated `json3` subtitle payloads the moment YouTube downloads them. It also extracts internal state like `ytInitialPlayerResponse` for optimal metadata access.
 
 ## Installation for Development
 

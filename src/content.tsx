@@ -37,6 +37,7 @@ const formatTime = (seconds: number) => {
 
 const ContentApp = () => {
   const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
+  const [translationSource, setTranslationSource] = useState<'native' | 'api' | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -172,7 +173,7 @@ const ContentApp = () => {
   useEffect(() => {
     const handleMessage = async (e: MessageEvent) => {
       if (e.source === window && e.data && e.data.type === 'YT_CAPTIONS_INTERCEPT') {
-        const { url, data } = e.data;
+        const { url, data, captionTracks } = e.data;
         if (!data || !data.events || data.events.length === 0) {
            setErrorMsg("Intercepted captions are empty.");
            return;
@@ -180,11 +181,12 @@ const ContentApp = () => {
         setLoading(true);
         setErrorMsg(null);
         try {
-          const subs = await processInterceptedCaptions(url, data);
-          if (subs.length === 0) {
+          const result = await processInterceptedCaptions(url, data, captionTracks);
+          if (result.subtitles.length === 0) {
             setErrorMsg(`Failed to parse intercepted subtitles.`);
           }
-          setSubtitles(subs);
+          setSubtitles(result.subtitles);
+          setTranslationSource(result.source);
         } catch(err: any) {
           setErrorMsg(err.message);
         }
@@ -399,7 +401,10 @@ const ContentApp = () => {
               <div className="space-y-6">
                 <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700/50">
                   <div className="flex items-center justify-between mb-4">
-                    <span className="text-gray-200 font-bold">English Subtitles</span>
+                    <span className="text-gray-200 font-bold flex items-center gap-2">
+                      English Subtitles
+                      <span className="text-[10px] bg-gray-700 text-gray-300 px-2 py-0.5 rounded uppercase tracking-wider">Source: YouTube</span>
+                    </span>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input type="checkbox" className="sr-only peer" checked={config.showEn} onChange={(e) => updateConfig({ showEn: e.target.checked })} />
                       <div className="w-14 h-7 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-blue-500"></div>
@@ -438,7 +443,14 @@ const ContentApp = () => {
                 
                 <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700/50">
                   <div className="flex items-center justify-between mb-4">
-                    <span className="text-gray-200 font-bold">Chinese Subtitles</span>
+                    <span className="text-gray-200 font-bold flex items-center gap-2">
+                      Chinese Subtitles
+                      {translationSource && (
+                        <span className={`text-[10px] px-2 py-0.5 rounded uppercase tracking-wider ${translationSource === 'native' ? 'bg-green-900/60 text-green-300' : 'bg-purple-900/60 text-purple-300'}`}>
+                          Source: {translationSource === 'native' ? 'Native Track' : 'API Fallback'}
+                        </span>
+                      )}
+                    </span>
                     <label className="relative inline-flex items-center cursor-pointer">
                       <input type="checkbox" className="sr-only peer" checked={config.showZh} onChange={(e) => updateConfig({ showZh: e.target.checked })} />
                       <div className="w-14 h-7 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[4px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-blue-500"></div>

@@ -1,4 +1,17 @@
 (function() {
+  function getCaptionTracks() {
+    try {
+      const player = document.querySelector('ytd-watch-flexy');
+      if (player && player.playerResponse && player.playerResponse.captions) {
+        return player.playerResponse.captions.playerCaptionsTracklistRenderer?.captionTracks;
+      }
+      if (window.ytInitialPlayerResponse && window.ytInitialPlayerResponse.captions) {
+        return window.ytInitialPlayerResponse.captions.playerCaptionsTracklistRenderer?.captionTracks;
+      }
+    } catch (e) {}
+    return null;
+  }
+
   const originalXhrOpen = XMLHttpRequest.prototype.open;
   const originalXhrSend = XMLHttpRequest.prototype.send;
 
@@ -12,7 +25,7 @@
       if (this._url && this._url.includes('/api/timedtext') && this._url.includes('fmt=json3')) {
         try {
           const data = JSON.parse(this.responseText);
-          window.postMessage({ type: 'YT_CAPTIONS_INTERCEPT', url: this._url, data: data }, '*');
+          window.postMessage({ type: 'YT_CAPTIONS_INTERCEPT', url: this._url, data: data, captionTracks: getCaptionTracks() }, '*');
         } catch(e) {}
       }
     });
@@ -27,7 +40,7 @@
       try {
         const cloned = response.clone();
         cloned.json().then(data => {
-          window.postMessage({ type: 'YT_CAPTIONS_INTERCEPT', url: url, data: data }, '*');
+          window.postMessage({ type: 'YT_CAPTIONS_INTERCEPT', url: url, data: data, captionTracks: getCaptionTracks() }, '*');
         }).catch(() => {});
       } catch(e) {}
     }

@@ -20,13 +20,22 @@ export async function processInterceptedCaptions(url: string, enData: any): Prom
 
     // Fetch Chinese subtitles by translating the intercepted track
     // If it fails, we just don't have zh translation
-    let zhData = { events: [] };
+    let zhData: any = { events: [] };
     try {
       const zhRes = await fetch(zhFetchUrl);
-      const zhTextRaw = await zhRes.text();
-      zhData = zhTextRaw ? JSON.parse(zhTextRaw) : { events: [] };
-    } catch (e) {
-      console.warn("Failed to fetch zh translation", e);
+      if (zhRes.ok) {
+        const zhTextRaw = await zhRes.text();
+        // Simple check to ensure it's likely JSON before parsing
+        if (zhTextRaw && zhTextRaw.trim().startsWith('{')) {
+          zhData = JSON.parse(zhTextRaw);
+        } else {
+          console.log("YT Lang Learn: zh translation response is not JSON.");
+        }
+      } else {
+        console.log("YT Lang Learn: zh translation fetch failed with status", zhRes.status);
+      }
+    } catch (e: any) {
+      console.log("YT Lang Learn: Failed to fetch zh translation:", e.message);
     }
 
     const subtitles: Subtitle[] = [];

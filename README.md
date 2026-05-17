@@ -4,10 +4,12 @@ A Manifest V3 Chrome Extension designed for language learners. It seamlessly inj
 
 ## Features
 
+- **Immersive Learn Mode**: Clicking the extension icon instantly toggles a dedicated learning view. It aggressively hides YouTube distractions (comments, recommendations) and expands the video player, overlaying large, highly-visible bilingual subtitles directly inside the video area.
 - **Bilingual Subtitles**: Automatically intercepts YouTube's closed captions (CC) and fetches the Chinese translation to display side-by-side in a scrollable sidebar.
 - **Auto-Sync & Click-to-Jump**: The subtitle sidebar auto-scrolls to keep the currently spoken sentence in view. Clicking any subtitle instantly jumps the video playback to that exact timestamp.
 - **A-B Sentence Looping**: Toggle the loop feature to continuously repeat the currently spoken sentence—perfect for listening comprehension and shadowing.
 - **Interactive Dictionary Lookup**: English subtitles are tokenized into clickable words. Clicking a word pauses the video and opens a floating tooltip with its definition fetched from a free dictionary API (`dictionaryapi.dev`).
+- **Cloud-Synced Display Settings**: Customize the visibility and font sizes of both English and Chinese subtitles independently for both the video overlay and the sidebar list. Settings are automatically synced across all your devices using `chrome.storage.sync`.
 
 ## Architecture & Technical Highlights
 

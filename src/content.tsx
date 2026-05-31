@@ -18,6 +18,9 @@ interface Config {
   fontSizeZh: number;
   sidebarFontSizeEn: number;
   sidebarFontSizeZh: number;
+  shadowingAutoStart: boolean;
+  shadowingFloatingUI: boolean;
+  shadowingAutoHideSubs: boolean;
 }
 
 const DEFAULT_CONFIG: Config = {
@@ -27,12 +30,83 @@ const DEFAULT_CONFIG: Config = {
   fontSizeZh: 24,
   sidebarFontSizeEn: 16,
   sidebarFontSizeZh: 14,
+  shadowingAutoStart: true,
+  shadowingFloatingUI: false,
+  shadowingAutoHideSubs: false,
 };
 
 const formatTime = (seconds: number) => {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+};
+
+// Helper to calculate string similarity based on Levenshtein distance
+const calculateSimilarity = (str1: string, str2: string): number => {
+  const cleanStr1 = str1.replace(/[^\w\s]|_/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+  const cleanStr2 = str2.replace(/[^\w\s]|_/g, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  if (!cleanStr1 || !cleanStr2) return 0;
+  if (cleanStr1 === cleanStr2) return 100;
+
+  const track = Array(cleanStr2.length + 1).fill(null).map(() =>
+    Array(cleanStr1.length + 1).fill(null)
+  );
+
+  for (let i = 0; i <= cleanStr1.length; i += 1) track[0][i] = i;
+  for (let j = 0; j <= cleanStr2.length; j += 1) track[j][0] = j;
+
+  for (let j = 1; j <= cleanStr2.length; j += 1) {
+    for (let i = 1; i <= cleanStr1.length; i += 1) {
+      const indicator = cleanStr1[i - 1] === cleanStr2[j - 1] ? 0 : 1;
+      track[j][i] = Math.min(
+        track[j][i - 1] + 1, // deletion
+        track[j - 1][i] + 1, // insertion
+        track[j - 1][i - 1] + indicator // substitution
+      );
+    }
+  }
+
+  const distance = track[cleanStr2.length][cleanStr1.length];
+  const maxLength = Math.max(cleanStr1.length, cleanStr2.length);
+  const similarity = ((maxLength - distance) / maxLength) * 100;
+  return Math.max(0, Math.round(similarity));
+};
+
+const getRandomComment = (score: number): string => {
+  if (score >= 90) {
+    const comments = [
+      "太神啦！簡直跟母語人士一樣！",
+      "完美發音！你是不是偷偷練了很久？",
+      "太完美了，這發音無懈可擊！",
+      "超強！請收下我的膝蓋！"
+    ];
+    return comments[Math.floor(Math.random() * comments.length)];
+  } else if (score >= 70) {
+    const comments = [
+      "發音很棒喔！再稍微雕琢一下就完美了！",
+      "非常接近了，繼續保持這個語感！",
+      "說得真好，聽得出來你很努力！",
+      "太厲害了，就差一點點就能滿分！"
+    ];
+    return comments[Math.floor(Math.random() * comments.length)];
+  } else if (score >= 50) {
+    const comments = [
+      "很不錯的嘗試！多唸幾次會更好！",
+      "漸入佳境！可以多注意連音和語調喔！",
+      "已經掌握到一些感覺了，再接再厲！",
+      "別氣餒，語言就是靠累積的，繼續加油！"
+    ];
+    return comments[Math.floor(Math.random() * comments.length)];
+  } else {
+    const comments = [
+      "萬事起頭難，有開口練習就是最棒的開始！",
+      "沒關係，多聽幾次再跟著唸一定會進步！",
+      "別灰心！我們再聽一次原音，慢慢來！",
+      "每一次的練習都在進步，不要放棄喔！"
+    ];
+    return comments[Math.floor(Math.random() * comments.length)];
+  }
 };
 
 const ContentApp = () => {
@@ -51,10 +125,24 @@ const ContentApp = () => {
   const [config, setConfig] = useState<Config>(DEFAULT_CONFIG);
   const [showSettings, setShowSettings] = useState(false);
 
+  // Shadowing Mode State
+  const [isShadowing, setIsShadowing] = useState(false);
+  const [isShadowingWaitingPlay, setIsShadowingWaitingPlay] = useState(false);
+  const [shadowingIdx, setShadowingIdx] = useState<number | null>(null);
+  const [shadowingTarget, setShadowingTarget] = useState<string | null>(null);
+  const [shadowingResult, setShadowingResult] = useState<string | null>(null);
+  const [shadowingScore, setShadowingScore] = useState<number | null>(null);
+  const [shadowingComment, setShadowingComment] = useState<string | null>(null);
+  const [shadowingError, setShadowingError] = useState<string | null>(null);
+
   const currentSubtitleRef = useRef<Subtitle | null>(null);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeSubtitleRef = useRef<HTMLDivElement>(null);
+  const recognitionRef = useRef<any>(null);
+  const originalVolumeRef = useRef<number | null>(null);
+  const silenceTimeoutRef = useRef<number | null>(null);
+  const targetReachedRef = useRef<boolean>(false);
 
   useEffect(() => {
     chrome.storage.sync.get(['ytll_config'], (result) => {
@@ -75,6 +163,187 @@ const ContentApp = () => {
     const active = subtitles.find(s => currentTime >= s.start && currentTime < (s.start + s.duration));
     currentSubtitleRef.current = active || null;
   }, [currentTime, subtitles]);
+
+  // Shadowing Web Speech Initialization & Cleanup
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch(e) {}
+      }
+      if (silenceTimeoutRef.current) {
+        window.clearTimeout(silenceTimeoutRef.current);
+      }
+      const video = document.querySelector("video");
+      if (video && originalVolumeRef.current !== null) {
+        video.volume = originalVolumeRef.current;
+      }
+    };
+  }, []);
+
+  const stopShadowing = () => {
+    if (silenceTimeoutRef.current) {
+      window.clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = null;
+    }
+    
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        console.error("Error stopping recognition", e);
+      }
+      recognitionRef.current = null;
+    }
+    
+    setIsShadowing(false);
+    setIsShadowingWaitingPlay(false);
+    targetReachedRef.current = false;
+    
+    const video = document.querySelector("video");
+    if (video && originalVolumeRef.current !== null) {
+      video.volume = originalVolumeRef.current;
+      originalVolumeRef.current = null;
+    }
+  };
+
+  const startShadowingRecording = () => {
+    const video = document.querySelector("video");
+    if (!video) return;
+
+    if (originalVolumeRef.current === null) {
+      originalVolumeRef.current = video.volume;
+    }
+    video.volume = 0.3; // Duck audio
+    
+    // Initialize Web Speech API
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setShadowingError("Speech Recognition API is not supported in this browser.");
+      setIsShadowingWaitingPlay(false);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'en-US';
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      
+      let finalTranscript = '';
+      
+      recognition.onstart = () => {
+        setIsShadowing(true);
+        setIsShadowingWaitingPlay(false);
+      };
+
+      recognition.onresult = (event: any) => {
+        const lines: string[] = [];
+        for (let i = 0; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            lines.push(event.results[i][0].transcript.trim());
+          }
+        }
+        setShadowingResult(lines.join('|||'));
+
+        // Reset silence timeout if target is reached
+        if (targetReachedRef.current) {
+          if (silenceTimeoutRef.current) window.clearTimeout(silenceTimeoutRef.current);
+          silenceTimeoutRef.current = window.setTimeout(() => {
+            stopShadowing();
+          }, 5000);
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error("Speech recognition error:", event.error);
+        if (event.error === 'not-allowed') {
+          setShadowingError("Microphone permission denied.");
+        } else {
+          setShadowingError(`Speech error: ${event.error}`);
+        }
+        stopShadowing();
+      };
+
+      recognition.onend = () => {
+        // If we didn't manually stop, try to restart if target isn't reached, or just let it stop.
+        // For simplicity, we just clean up UI
+        if (isShadowing) {
+          stopShadowing();
+        }
+      };
+
+      recognitionRef.current = recognition;
+      recognition.start();
+      
+    } catch (err: any) {
+      console.error("Failed to start Speech Recognition", err);
+      setShadowingError(err.message || "Failed to start Speech Recognition");
+      stopShadowing();
+    }
+  };
+
+  const startShadowing = () => {
+    // Reset state
+    setShadowingIdx(null); // not used anymore for individual subtitles
+    setShadowingResult(null);
+    setShadowingScore(null);
+    setShadowingComment(null);
+    setShadowingError(null);
+    targetReachedRef.current = false;
+    if (silenceTimeoutRef.current) {
+      window.clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = null;
+    }
+    
+    const video = document.querySelector("video");
+    if (!video) return;
+
+    let targetText = "";
+    
+    if (abModeActive && abStart !== null && abEnd !== null) {
+      // A-B Mode active
+      const slice = subtitles.slice(abStart, abEnd + 1);
+      targetText = slice.map(s => s.en).join(" ");
+      if (config.shadowingAutoStart) video.currentTime = subtitles[abStart].start;
+    } else {
+      // Normal mode
+      targetText = subtitles.map(s => s.en).join(" ");
+      if (config.shadowingAutoStart) video.currentTime = 0;
+    }
+
+    setShadowingTarget(targetText);
+
+    if (config.shadowingAutoStart) {
+      video.play().then(() => {
+        startShadowingRecording();
+      }).catch(e => {
+        // If auto-play blocked, fall back to waiting
+        setIsShadowingWaitingPlay(true);
+      });
+    } else {
+      setIsShadowingWaitingPlay(true);
+    }
+  };
+
+  const toggleShadowing = () => {
+    if (isShadowing || isShadowingWaitingPlay) {
+      stopShadowing();
+    } else {
+      startShadowing();
+    }
+  };
+
+  // Calculate score when shadowing finishes and result exists
+  useEffect(() => {
+    if (!isShadowing && shadowingResult && shadowingTarget) {
+      const combinedResult = shadowingResult.replace(/\|\|\|/g, ' ');
+      const score = calculateSimilarity(shadowingTarget, combinedResult);
+      setShadowingScore(score);
+      setShadowingComment(getRandomComment(score));
+    }
+  }, [isShadowing, shadowingResult, shadowingTarget]);
 
   useEffect(() => {
     const handleNavigate = () => {
@@ -212,8 +481,46 @@ const ContentApp = () => {
     const video = document.querySelector("video");
     if (!video) return;
 
+    const handlePlay = () => {
+      if (isShadowingWaitingPlay) {
+        if (abModeActive && abStart !== null && subtitles[abStart]) {
+          video.currentTime = subtitles[abStart].start;
+        } else {
+          video.currentTime = 0;
+        }
+        startShadowingRecording();
+      }
+    };
+
     const handleTimeUpdate = () => {
       setCurrentTime(video.currentTime);
+      
+      // Auto-Stop Mechanism for Shadowing Mode
+      if (isShadowing) {
+        if (abModeActive && abStart !== null && abEnd !== null) {
+          const endSub = subtitles[abEnd];
+          if (endSub && video.currentTime >= endSub.start + endSub.duration + 2) {
+            if (!targetReachedRef.current) {
+              targetReachedRef.current = true;
+              if (silenceTimeoutRef.current) window.clearTimeout(silenceTimeoutRef.current);
+              silenceTimeoutRef.current = window.setTimeout(() => {
+                stopShadowing();
+              }, 5000);
+            }
+          }
+        } else {
+          const lastSub = subtitles[subtitles.length - 1];
+          if (lastSub && video.currentTime >= lastSub.start + lastSub.duration + 2) {
+            if (!targetReachedRef.current) {
+              targetReachedRef.current = true;
+              if (silenceTimeoutRef.current) window.clearTimeout(silenceTimeoutRef.current);
+              silenceTimeoutRef.current = window.setTimeout(() => {
+                stopShadowing();
+              }, 5000);
+            }
+          }
+        }
+      }
       
       if (abModeActive && abStart !== null && abEnd !== null) {
         const startSub = subtitles[abStart];
@@ -224,17 +531,21 @@ const ContentApp = () => {
           
           if (!video.paused && video.currentTime >= endTime && video.currentTime < endTime + 2) {
             video.pause();
-            video.currentTime = startTime;
+            if (!isShadowing) {
+              video.currentTime = startTime;
+            }
           }
         }
       }
     };
 
     video.addEventListener("timeupdate", handleTimeUpdate);
+    video.addEventListener("play", handlePlay);
     return () => {
       video.removeEventListener("timeupdate", handleTimeUpdate);
+      video.removeEventListener("play", handlePlay);
     };
-  }, [abModeActive, abStart, abEnd, subtitles]);
+  }, [abModeActive, abStart, abEnd, subtitles, isShadowing, isShadowingWaitingPlay]);
 
   // Auto-scroll to active subtitle
   useEffect(() => {
@@ -346,7 +657,7 @@ const ContentApp = () => {
         </button>
       )}
 
-      {isVisible && currentSubtitleRef.current && (config.showEn || config.showZh) && (
+      {isVisible && currentSubtitleRef.current && (config.showEn || config.showZh) && !((isShadowing || isShadowingWaitingPlay) && config.shadowingAutoHideSubs) && (
         <div 
           className="fixed z-[9998] pointer-events-none flex flex-col items-center justify-end pb-24"
           style={{
@@ -389,6 +700,26 @@ const ContentApp = () => {
               YtLL
             </h2>
             <div className="flex gap-3 items-center">
+              <button
+                onClick={toggleShadowing}
+                className={`px-4 py-2 rounded-lg text-base font-bold transition-colors flex items-center gap-2 ${
+                  isShadowing || isShadowingWaitingPlay
+                    ? "bg-red-600/80 text-white hover:bg-red-700 shadow-md border border-red-500" 
+                    : "bg-gray-800 text-gray-300 hover:bg-gray-700"
+                }`}
+                title="Toggle Shadowing Mode"
+              >
+                {isShadowing || isShadowingWaitingPlay ? (
+                  <>
+                    <span className={`w-2.5 h-2.5 rounded-full bg-white ${isShadowing ? 'animate-pulse' : ''}`}></span>
+                    Stop 錄音
+                  </>
+                ) : (
+                  <>
+                    🎤 Shadowing
+                  </>
+                )}
+              </button>
               <button
                 onClick={() => {
                   const nextState = !abModeActive;
@@ -528,7 +859,102 @@ const ContentApp = () => {
                     </div>
                   )}
                 </div>
+
+                <div className="bg-gray-900/50 p-4 rounded-lg border border-gray-700/50 space-y-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-gray-200 font-bold flex items-center gap-2">
+                      <svg className="w-5 h-5 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg>
+                      Shadowing Settings
+                    </span>
+                  </div>
+                  
+                  <div className="flex items-center justify-between pl-2">
+                    <span className="text-gray-400 text-sm">Auto-start play/record on enable</span>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" className="sr-only peer" checked={config.shadowingAutoStart} onChange={(e) => updateConfig({ shadowingAutoStart: e.target.checked })} />
+                      <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+                    </label>
+                  </div>
+                  
+                  <div className="flex items-center justify-between pl-2">
+                    <span className="text-gray-400 text-sm">Floating UI</span>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" className="sr-only peer" checked={config.shadowingFloatingUI} onChange={(e) => updateConfig({ shadowingFloatingUI: e.target.checked })} />
+                      <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+                    </label>
+                  </div>
+                  
+                  <div className="flex items-center justify-between pl-2">
+                    <span className="text-gray-400 text-sm">Auto-hide subtitles when shadowing</span>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                      <input type="checkbox" className="sr-only peer" checked={config.shadowingAutoHideSubs} onChange={(e) => updateConfig({ shadowingAutoHideSubs: e.target.checked })} />
+                      <div className="w-11 h-6 bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-red-500"></div>
+                    </label>
+                  </div>
+                </div>
               </div>
+            </div>
+          )}
+
+          {/* Shadowing Score Display Area */}
+          {(isShadowing || shadowingResult || shadowingError || isShadowingWaitingPlay) && (
+            <div className={config.shadowingFloatingUI 
+              ? "fixed top-24 left-6 z-[9999] bg-black/80 p-6 rounded-2xl border border-gray-600/50 shadow-2xl backdrop-blur-md max-w-[800px] w-[80vw] cursor-move" 
+              : "bg-gray-900/80 p-4 mb-4 rounded-xl border border-gray-700 shadow-inner shrink-0"}>
+              <div className="flex justify-between items-start mb-2">
+                <span className="text-gray-400 font-bold text-sm uppercase tracking-wider flex items-center gap-2">
+                  Shadowing Result
+                  {isShadowingWaitingPlay && <span className="text-[10px] bg-yellow-900/60 text-yellow-300 px-2 py-0.5 rounded border border-yellow-800/50">Waiting to play...</span>}
+                  {isShadowing && <span className="text-[10px] bg-red-900/60 text-red-300 px-2 py-0.5 rounded border border-red-800/50">Recording...</span>}
+                </span>
+                {shadowingScore !== null && !isShadowing && (
+                  <div className="flex flex-col items-end gap-1">
+                    <span className={`text-base font-bold px-3 py-1 rounded-lg ${
+                      shadowingScore >= 80 ? 'bg-green-900/50 text-green-400 border border-green-800' :
+                      shadowingScore >= 50 ? 'bg-yellow-900/50 text-yellow-400 border border-yellow-800' :
+                      'bg-red-900/50 text-red-400 border border-red-800'
+                    }`}>
+                      Score: {shadowingScore}%
+                    </span>
+                    {shadowingComment && (
+                      <span className={`text-[11px] px-2 py-0.5 rounded shadow-sm font-medium ${
+                        shadowingScore >= 80 ? 'bg-green-800/30 text-green-300' :
+                        shadowingScore >= 50 ? 'bg-yellow-800/30 text-yellow-300' :
+                        'bg-red-800/30 text-red-300'
+                      }`}>
+                        {shadowingComment}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+              
+              {(isShadowing || isShadowingWaitingPlay) && (
+                <div className="text-sm text-yellow-500/80 italic mb-2">
+                  For best results, please wear headphones. Target: {abModeActive && abStart !== null ? "A-B Segment" : "Full Video"}
+                </div>
+              )}
+              
+              {shadowingError && (
+                <div className="text-sm text-red-400 bg-red-900/20 p-3 rounded border border-red-900/50 mt-2">
+                  {shadowingError}
+                </div>
+              )}
+              
+              {shadowingResult && (
+                <div className="mt-4 space-y-2">
+                  <div>
+                    <span className="text-gray-500 text-[10px] uppercase block mb-1 font-bold tracking-wider">Your Speech:</span>
+                    <div className="space-y-1.5 p-3 bg-gray-800/60 rounded-lg border border-gray-700 max-h-[40vh] overflow-y-auto">
+                      {shadowingResult.split('|||').filter(Boolean).map((line, i) => (
+                        <p key={i} className={`text-gray-300 ${config.shadowingFloatingUI ? 'text-lg leading-relaxed' : 'text-sm'}`}>
+                          {line}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -541,59 +967,67 @@ const ContentApp = () => {
             {!loading && !errorMsg && subtitles.length === 0 && (
               <p className="text-gray-400 text-center py-8">No subtitles found for this video.</p>
             )}
-            {subtitles.map((sub, idx) => {
-              const isActive = currentTime >= sub.start && currentTime < (sub.start + sub.duration);
-              
-              let isAbHighlighted = false;
-              if (abModeActive) {
-                if (abStart !== null && abEnd !== null) {
-                  isAbHighlighted = idx >= abStart && idx <= abEnd;
-                } else if (abStart !== null) {
-                  isAbHighlighted = idx === abStart;
+            
+            {((isShadowing || isShadowingWaitingPlay) && config.shadowingAutoHideSubs) ? (
+              <div className="flex flex-col items-center justify-center h-full py-12 text-gray-500 space-y-4">
+                <svg className="w-12 h-12 opacity-50" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>
+                <p>Subtitles are hidden during Shadowing mode.</p>
+              </div>
+            ) : (
+              subtitles.map((sub, idx) => {
+                const isActive = currentTime >= sub.start && currentTime < (sub.start + sub.duration);
+                
+                let isAbHighlighted = false;
+                if (abModeActive) {
+                  if (abStart !== null && abEnd !== null) {
+                    isAbHighlighted = idx >= abStart && idx <= abEnd;
+                  } else if (abStart !== null) {
+                    isAbHighlighted = idx === abStart;
+                  }
                 }
-              }
 
-              return (
-                <div 
-                  key={idx} 
-                  ref={isActive ? activeSubtitleRef : null}
-                  onClick={() => handleSubtitleClick(idx, sub.start)}
-                  className={`flex gap-4 p-4 rounded-xl cursor-pointer transition-all duration-200 ${
-                    isActive && isAbHighlighted
-                      ? "bg-blue-800/60 shadow-lg scale-[1.02] border border-blue-400"
-                      : isActive 
-                      ? "bg-gray-800/80 shadow-lg scale-[1.02] border border-gray-700" 
-                      : isAbHighlighted
-                      ? "bg-blue-900/30 border border-blue-500/50 opacity-90"
-                      : "hover:bg-gray-800/40 opacity-70 hover:opacity-100 border border-transparent"
-                  }`}
-                >
-                  <div className={`font-mono mt-1 ${isActive ? "text-yellow-500 font-bold" : "text-gray-500"}`} style={{ fontSize: '13px' }}>
-                    {formatTime(sub.start)}
+                return (
+                  <div 
+                    key={idx} 
+                    ref={isActive ? activeSubtitleRef : null}
+                    onClick={() => handleSubtitleClick(idx, sub.start)}
+                    className={`flex gap-4 p-4 rounded-xl cursor-pointer transition-all duration-200 ${
+                      isActive && isAbHighlighted
+                        ? "bg-blue-800/60 shadow-lg scale-[1.02] border border-blue-400"
+                        : isActive 
+                        ? "bg-gray-800/80 shadow-lg scale-[1.02] border border-gray-700" 
+                        : isAbHighlighted
+                        ? "bg-blue-900/30 border border-blue-500/50 opacity-90"
+                        : "hover:bg-gray-800/40 opacity-70 hover:opacity-100 border border-transparent"
+                    }`}
+                  >
+                    <div className={`font-mono mt-1 ${isActive ? "text-yellow-500 font-bold" : "text-gray-500"}`} style={{ fontSize: '13px' }}>
+                      {formatTime(sub.start)}
+                    </div>
+                    <div className="flex-1 space-y-1.5">
+                      {config.showEn && (
+                        <p className={`font-medium leading-relaxed ${isActive ? "text-yellow-400" : "text-gray-300"}`} style={{ fontSize: `${config.sidebarFontSizeEn}px` }}>
+                          {sub.en.split(' ').map((word, wIdx) => (
+                            <span 
+                              key={wIdx} 
+                              onClick={(e) => handleWordClick(e, word)}
+                              className={`rounded px-[2px] transition-colors ${isActive ? "hover:bg-yellow-500/20" : "hover:bg-gray-700"}`}
+                            >
+                              {word}{" "}
+                            </span>
+                          ))}
+                        </p>
+                      )}
+                      {config.showZh && (
+                        <p className={`${isActive ? "text-gray-300" : "text-gray-500"}`} style={{ fontSize: `${config.sidebarFontSizeZh}px` }}>
+                          {sub.zh}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex-1 space-y-1.5">
-                    {config.showEn && (
-                      <p className={`font-medium leading-relaxed ${isActive ? "text-yellow-400" : "text-gray-300"}`} style={{ fontSize: `${config.sidebarFontSizeEn}px` }}>
-                        {sub.en.split(' ').map((word, wIdx) => (
-                          <span 
-                            key={wIdx} 
-                            onClick={(e) => handleWordClick(e, word)}
-                            className={`rounded px-[2px] transition-colors ${isActive ? "hover:bg-yellow-500/20" : "hover:bg-gray-700"}`}
-                          >
-                            {word}{" "}
-                          </span>
-                        ))}
-                      </p>
-                    )}
-                    {config.showZh && (
-                      <p className={`${isActive ? "text-gray-300" : "text-gray-500"}`} style={{ fontSize: `${config.sidebarFontSizeZh}px` }}>
-                        {sub.zh}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
 
           {tooltip && (

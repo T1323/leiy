@@ -41,7 +41,9 @@ const ContentApp = () => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
-  const [loopActive, setLoopActive] = useState(false);
+  const [abModeActive, setAbModeActive] = useState(false);
+  const [abStart, setAbStart] = useState<number | null>(null);
+  const [abEnd, setAbEnd] = useState<number | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const [isWatchPage, setIsWatchPage] = useState(window.location.pathname === '/watch');
@@ -213,10 +215,17 @@ const ContentApp = () => {
     const handleTimeUpdate = () => {
       setCurrentTime(video.currentTime);
       
-      if (loopActive && currentSubtitleRef.current) {
-        const sub = currentSubtitleRef.current;
-        if (video.currentTime >= sub.start + sub.duration) {
-          video.currentTime = sub.start;
+      if (abModeActive && abStart !== null && abEnd !== null) {
+        const startSub = subtitles[abStart];
+        const endSub = subtitles[abEnd];
+        if (startSub && endSub) {
+          const endTime = endSub.start + endSub.duration;
+          const startTime = startSub.start;
+          
+          if (!video.paused && video.currentTime >= endTime && video.currentTime < endTime + 2) {
+            video.pause();
+            video.currentTime = startTime;
+          }
         }
       }
     };
@@ -225,7 +234,7 @@ const ContentApp = () => {
     return () => {
       video.removeEventListener("timeupdate", handleTimeUpdate);
     };
-  }, [loopActive]);
+  }, [abModeActive, abStart, abEnd, subtitles]);
 
   // Auto-scroll to active subtitle
   useEffect(() => {
@@ -248,8 +257,34 @@ const ContentApp = () => {
     }
   }, [currentTime]);
 
-  const handleSubtitleClick = (start: number) => {
+  const handleSubtitleClick = (idx: number, start: number) => {
     const video = document.querySelector("video");
+    
+    if (abModeActive) {
+      if (abStart !== null && abEnd !== null) {
+        // Both set, clear and restart from clicked
+        setAbStart(idx);
+        setAbEnd(null);
+      } else if (abStart === null) {
+        // First click
+        setAbStart(idx);
+      } else if (abStart !== null && abEnd === null) {
+        // Second click
+        if (idx < abStart) {
+          // Clicked before start, update start, keep end null
+          setAbStart(idx);
+        } else {
+          // Clicked after or equal to start, set end and play
+          setAbEnd(idx);
+          if (video) {
+            video.currentTime = subtitles[abStart].start;
+            video.play();
+          }
+        }
+      }
+      return;
+    }
+
     if (video) {
       video.currentTime = start;
       video.play();
@@ -355,16 +390,23 @@ const ContentApp = () => {
             </h2>
             <div className="flex gap-3 items-center">
               <button
-                onClick={() => setLoopActive(!loopActive)}
+                onClick={() => {
+                  const nextState = !abModeActive;
+                  setAbModeActive(nextState);
+                  if (nextState) {
+                    setAbStart(null);
+                    setAbEnd(null);
+                  }
+                }}
                 className={`px-4 py-2 rounded-lg text-base font-bold transition-colors flex items-center gap-2 ${
-                  loopActive 
+                  abModeActive 
                     ? "bg-green-600 text-white hover:bg-green-700 shadow-md" 
                     : "bg-gray-800 text-gray-300 hover:bg-gray-700"
                 }`}
-                title="Toggle A-B Loop"
+                title="Toggle A-B Segment Mode"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                Loop
+                A-B 區間
               </button>
               <button
                 onClick={() => setShowSettings(!showSettings)}
@@ -501,14 +543,28 @@ const ContentApp = () => {
             )}
             {subtitles.map((sub, idx) => {
               const isActive = currentTime >= sub.start && currentTime < (sub.start + sub.duration);
+              
+              let isAbHighlighted = false;
+              if (abModeActive) {
+                if (abStart !== null && abEnd !== null) {
+                  isAbHighlighted = idx >= abStart && idx <= abEnd;
+                } else if (abStart !== null) {
+                  isAbHighlighted = idx === abStart;
+                }
+              }
+
               return (
                 <div 
                   key={idx} 
                   ref={isActive ? activeSubtitleRef : null}
-                  onClick={() => handleSubtitleClick(sub.start)}
+                  onClick={() => handleSubtitleClick(idx, sub.start)}
                   className={`flex gap-4 p-4 rounded-xl cursor-pointer transition-all duration-200 ${
-                    isActive 
+                    isActive && isAbHighlighted
+                      ? "bg-blue-800/60 shadow-lg scale-[1.02] border border-blue-400"
+                      : isActive 
                       ? "bg-gray-800/80 shadow-lg scale-[1.02] border border-gray-700" 
+                      : isAbHighlighted
+                      ? "bg-blue-900/30 border border-blue-500/50 opacity-90"
                       : "hover:bg-gray-800/40 opacity-70 hover:opacity-100 border border-transparent"
                   }`}
                 >

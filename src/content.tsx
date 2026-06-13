@@ -616,10 +616,6 @@ const stopMediaRecorder = () => {
         // Both set, clear and restart from clicked
         setAbStart(idx);
         setAbEnd(null);
-        // Clear shadowing target when restarting A-B selection in shadowing mode
-        if (isShadowing || isShadowingWaitingPlay) {
-          setShadowingTarget(null);
-        }
       } else if (abStart === null) {
         // First click
         setAbStart(idx);
@@ -628,10 +624,6 @@ const stopMediaRecorder = () => {
         if (idx < abStart) {
           // Clicked before start, update start, keep end null
           setAbStart(idx);
-          // Clear shadowing target when restarting A-B selection in shadowing mode
-          if (isShadowing || isShadowingWaitingPlay) {
-            setShadowingTarget(null);
-          }
         } else {
           // Clicked after or equal to start, set end
           setAbEnd(idx);

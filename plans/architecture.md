@@ -41,3 +41,9 @@ graph TD
 3. **UI Injection:** To prevent YouTube's complex global CSS from breaking our Tailwind styles, the React root is injected inside a Shadow DOM element.
 4. **Dictionary Lookup:** Content Scripts cannot easily bypass CORS if the target page has strict CSP. Therefore, word lookups are delegated to the Background Service Worker via `chrome.runtime.sendMessage`.
 5. **SPA Navigation:** YouTube is an SPA. We use `window.addEventListener('message')` to receive new intercepted subtitles without requiring a full page refresh.
+
+## Recent Implementation Notes
+- **Shadowing Result Overlay:** The content script now includes a shadowing practice overlay that records user audio, transcribes it, and displays a score plus comparison against the target subtitle.
+- **Recording Lifecycle:** Closing the overlay clears the original recording resources and revokes the generated audio URL to prevent stale blobs from staying in memory.
+- **Playback and Save Controls:** The overlay supports playback of the recorded shadowing audio, as well as saving the recording to a file if the user chooses.
+- **Shadow DOM Stability:** The React UI remains injected in Shadow DOM so extension styling stays isolated from YouTube page styles.

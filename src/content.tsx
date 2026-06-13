@@ -128,14 +128,21 @@ const ContentApp = () => {
   // Shadowing Mode State
   const [isShadowing, setIsShadowing] = useState(false);
   const [isShadowingWaitingPlay, setIsShadowingWaitingPlay] = useState(false);
-  const [shadowingIdx, setShadowingIdx] = useState<number | null>(null);
   const [shadowingTarget, setShadowingTarget] = useState<string | null>(null);
   const [shadowingResult, setShadowingResult] = useState<string | null>(null);
   const [shadowingScore, setShadowingScore] = useState<number | null>(null);
   const [shadowingComment, setShadowingComment] = useState<string | null>(null);
   const [shadowingError, setShadowingError] = useState<string | null>(null);
+  const [shadowingOverlayVisible, setShadowingOverlayVisible] = useState(false);
+  const [shadowingCompareMode, setShadowingCompareMode] = useState(false);
+  const [recordingBlob, setRecordingBlob] = useState<Blob | null>(null);
+  const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
+  const recordingFileName = "shadowing_recording.webm";
 
   const currentSubtitleRef = useRef<Subtitle | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const activeSubtitleRef = useRef<HTMLDivElement>(null);
@@ -182,6 +189,19 @@ const ContentApp = () => {
     };
   }, []);
 
+const stopMediaRecorder = () => {
+    if (mediaRecorderRef.current) {
+      try {
+        if (mediaRecorderRef.current.state !== 'inactive') {
+          mediaRecorderRef.current.stop();
+        }
+      } catch (e) {
+        console.error('Error stopping media recorder', e);
+      }
+      mediaRecorderRef.current = null;
+    }
+  };
+
   const stopShadowing = () => {
     if (silenceTimeoutRef.current) {
       window.clearTimeout(silenceTimeoutRef.current);
@@ -196,6 +216,8 @@ const ContentApp = () => {
       }
       recognitionRef.current = null;
     }
+
+    stopMediaRecorder();
     
     setIsShadowing(false);
     setIsShadowingWaitingPlay(false);
@@ -208,7 +230,7 @@ const ContentApp = () => {
     }
   };
 
-  const startShadowingRecording = () => {
+  const startShadowingRecording = async () => {
     const video = document.querySelector("video");
     if (!video) return;
 
@@ -226,12 +248,28 @@ const ContentApp = () => {
     }
 
     try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorder.ondataavailable = (event: BlobEvent) => {
+        if (event.data && event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        setRecordingBlob(blob);
+        const url = URL.createObjectURL(blob);
+        setRecordingUrl(url);
+        stream.getTracks().forEach(track => track.stop());
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+
       const recognition = new SpeechRecognition();
       recognition.lang = 'en-US';
       recognition.continuous = true;
       recognition.interimResults = false;
-      
-      let finalTranscript = '';
       
       recognition.onstart = () => {
         setIsShadowing(true);
@@ -267,8 +305,6 @@ const ContentApp = () => {
       };
 
       recognition.onend = () => {
-        // If we didn't manually stop, try to restart if target isn't reached, or just let it stop.
-        // For simplicity, we just clean up UI
         if (isShadowing) {
           stopShadowing();
         }
@@ -286,11 +322,14 @@ const ContentApp = () => {
 
   const startShadowing = () => {
     // Reset state
-    setShadowingIdx(null); // not used anymore for individual subtitles
     setShadowingResult(null);
     setShadowingScore(null);
     setShadowingComment(null);
     setShadowingError(null);
+    setShadowingOverlayVisible(false);
+    setShadowingCompareMode(false);
+    setRecordingBlob(null);
+    setRecordingUrl(null);
     targetReachedRef.current = false;
     if (silenceTimeoutRef.current) {
       window.clearTimeout(silenceTimeoutRef.current);
@@ -318,7 +357,7 @@ const ContentApp = () => {
     if (config.shadowingAutoStart) {
       video.play().then(() => {
         startShadowingRecording();
-      }).catch(e => {
+      }).catch(() => {
         // If auto-play blocked, fall back to waiting
         setIsShadowingWaitingPlay(true);
       });
@@ -342,6 +381,7 @@ const ContentApp = () => {
       const score = calculateSimilarity(shadowingTarget, combinedResult);
       setShadowingScore(score);
       setShadowingComment(getRandomComment(score));
+      setShadowingOverlayVisible(true);
     }
   }, [isShadowing, shadowingResult, shadowingTarget]);
 
@@ -639,6 +679,49 @@ const ContentApp = () => {
     }
   };
 
+  const handleCloseOverlay = () => {
+    setShadowingOverlayVisible(false);
+    setShadowingCompareMode(false);
+    setShadowingScore(null);
+    setShadowingComment(null);
+    setShadowingResult(null);
+    setShadowingTarget(null);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+    setRecordingBlob(null);
+    if (recordingUrl) {
+      URL.revokeObjectURL(recordingUrl);
+      setRecordingUrl(null);
+    }
+    // 直接關閉浮層時同時刪除原始錄音
+  };
+
+  const handleToggleCompare = () => {
+    setShadowingCompareMode((prev) => !prev);
+    setShadowingOverlayVisible(true);
+  };
+
+  const handlePlayRecording = () => {
+    if (recordingUrl && audioRef.current) {
+      audioRef.current.currentTime = 0;
+      audioRef.current.play();
+    }
+  };
+
+  const handleSaveRecording = () => {
+    if (!recordingBlob) return;
+    const url = URL.createObjectURL(recordingBlob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = recordingFileName || 'shadowing_recording.webm';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const isShadowingComplete = !isShadowing && !isShadowingWaitingPlay && shadowingScore !== null && shadowingOverlayVisible;
+
   if (!isWatchPage) {
     return null; // Don't render anything if not on a watch page
   }
@@ -655,6 +738,66 @@ const ContentApp = () => {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
           </svg>
         </button>
+      )}
+
+      {isShadowingComplete && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center pointer-events-none px-4">
+          <div className="w-[70vw] max-w-[900px] min-h-[38vh] bg-black/95 border border-white/15 rounded-[36px] shadow-[0_40px_120px_rgba(0,0,0,0.75)] backdrop-blur-2xl p-10 text-center pointer-events-auto">
+            <div className="text-[5rem] md:text-[6.5rem] font-extrabold tracking-tight text-white leading-none mb-4">
+              {shadowingScore}%
+            </div>
+            <div className="text-5xl md:text-6xl font-bold text-white mb-2">
+              {shadowingComment}
+            </div>
+            <div className="flex flex-wrap justify-center gap-3 mb-5">
+              <button
+                onClick={handleCloseOverlay}
+                className="px-6 py-3 rounded-full bg-green-600 hover:bg-green-500 text-white font-semibold"
+              >
+                確定
+              </button>
+              <button
+                onClick={handleToggleCompare}
+                className="px-6 py-3 rounded-full bg-blue-600 hover:bg-blue-500 text-white font-semibold"
+              >
+                {shadowingCompareMode ? '關閉比較' : '比較'}
+              </button>
+              <button
+                onClick={handlePlayRecording}
+                disabled={!recordingUrl}
+                className="px-6 py-3 rounded-full bg-yellow-500 hover:bg-yellow-400 text-black font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                播放錄音
+              </button>
+              <button
+                onClick={handleSaveRecording}
+                disabled={!recordingBlob}
+                className="px-6 py-3 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                另存錄音
+              </button>
+            </div>
+
+            {shadowingCompareMode && (
+              <div className="grid gap-5 md:grid-cols-2 text-left">
+                <div className="bg-white/5 border border-white/10 rounded-3xl p-6 max-h-[32vh] overflow-y-auto">
+                  <div className="text-base md:text-lg uppercase tracking-[0.2em] text-gray-400 mb-3">字幕原文</div>
+                  <p className="whitespace-pre-wrap text-gray-100 leading-relaxed text-xl md:text-2xl">
+                    {shadowingTarget || '無可比較字幕'}
+                  </p>
+                </div>
+                <div className="bg-white/5 border border-white/10 rounded-3xl p-6 max-h-[32vh] overflow-y-auto">
+                  <div className="text-base md:text-lg uppercase tracking-[0.2em] text-gray-400 mb-3">錄音判讀</div>
+                  <p className="whitespace-pre-wrap text-gray-100 leading-relaxed text-xl md:text-2xl">
+                    {shadowingResult ? shadowingResult.split('|||').filter(Boolean).join(' ') : '無錄音判讀結果'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <audio ref={audioRef} src={recordingUrl ?? undefined} hidden />
+          </div>
+        </div>
       )}
 
       {isVisible && currentSubtitleRef.current && (config.showEn || config.showZh) && !((isShadowing || isShadowingWaitingPlay) && config.shadowingAutoHideSubs) && (
@@ -907,7 +1050,7 @@ const ContentApp = () => {
                   {isShadowingWaitingPlay && <span className="text-[10px] bg-yellow-900/60 text-yellow-300 px-2 py-0.5 rounded border border-yellow-800/50">Waiting to play...</span>}
                   {isShadowing && <span className="text-[10px] bg-red-900/60 text-red-300 px-2 py-0.5 rounded border border-red-800/50">Recording...</span>}
                 </span>
-                {shadowingScore !== null && !isShadowing && (
+                {shadowingScore !== null && !isShadowing && !isShadowingComplete && (
                   <div className="flex flex-col items-end gap-1">
                     <span className={`text-base font-bold px-3 py-1 rounded-lg ${
                       shadowingScore >= 80 ? 'bg-green-900/50 text-green-400 border border-green-800' :

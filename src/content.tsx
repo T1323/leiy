@@ -616,6 +616,10 @@ const stopMediaRecorder = () => {
         // Both set, clear and restart from clicked
         setAbStart(idx);
         setAbEnd(null);
+        // Clear shadowing target when restarting A-B selection in shadowing mode
+        if (isShadowing || isShadowingWaitingPlay) {
+          setShadowingTarget(null);
+        }
       } else if (abStart === null) {
         // First click
         setAbStart(idx);
@@ -624,10 +628,21 @@ const stopMediaRecorder = () => {
         if (idx < abStart) {
           // Clicked before start, update start, keep end null
           setAbStart(idx);
+          // Clear shadowing target when restarting A-B selection in shadowing mode
+          if (isShadowing || isShadowingWaitingPlay) {
+            setShadowingTarget(null);
+          }
         } else {
-          // Clicked after or equal to start, set end and play
+          // Clicked after or equal to start, set end
           setAbEnd(idx);
-          if (video) {
+          
+          // If in shadowing mode, update the shadowing target with new A-B range
+          if (isShadowing || isShadowingWaitingPlay) {
+            const slice = subtitles.slice(abStart, idx + 1);
+            const newTarget = slice.map(s => s.en).join(" ");
+            setShadowingTarget(newTarget);
+          } else if (video) {
+            // If not in shadowing mode, auto-play as before
             video.currentTime = subtitles[abStart].start;
             video.play();
           }
